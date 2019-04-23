@@ -72,13 +72,28 @@ class LwMap {
     this.__addObject(id, marker);
   }
 
+  /**
+   * 添加多边形覆盖物
+   * 参数 id, 点的集合数组, 线的颜色, 多边形填充颜色, 线的粗细, 覆盖物的透明度
+   */
+  addPolygon(id, point, lineColor,fillColor, lineWeight,polygonOpa){        
+    var bpoint = [];
+    point.forEach(function (i){
+      bpoint.push(new BMap.Point(i[0],i[1]))
+    });
+    var polygon = new BMap.Polygon(bpoint, {strokeColor:lineColor, fillColor: fillColor, strokeWeight:lineWeight, strokeOpacity:polygonOpa});    
+    this.map.addOverlay(polygon);
+    this.__addObject(id,polygon);
+  }
+
+
   // 移除物体
-  removeObject(name) {
-    var obj = this.mapBox[name];
+  removeObject(id) {
+    var obj = this.mapBox[id];
     if (obj) {
       this.map.removeOverlay(obj);
     }
-    delete this.mapBox[name];
+    delete this.mapBox[id];
   }
 
   // 私有方法
