@@ -251,22 +251,22 @@ class LwMap {
     }
     scan();
   }
-  
- /**
-  * 添加轨迹线
-  * 参数 id : 添加的轨迹线的id 
-  * stratPostion : 轨迹起始点位置 [] 
-  * imgPath :图片路径 
-  * imgSize : 图片大小
-  * imgAncher : 图片锚点 []
-  * path : 轨迹坐标[]
-  * lableName : 轨迹点的下标名称 
-  * labelOffset : 下标名称的锚点[]
-  * position : 轨迹点于轨迹线的位置 
-  * lineColor :轨迹线的颜色 
-  * lineWeight : 轨迹点的粗细
-  */
-  addPathLine (id, stratPostion, imgPath, imgSize, imgAncher, path, lableName = '', labelOffset = [-35, 0], position = 'BM', lineColor = '#1104c7', lineWeight = 10) {
+
+  /**
+   * 设置轨迹路线
+   * 轨迹数组 pathArr: [[a,b], [a,b]],  
+   * 图片路径 imgPath: url,  
+   * 图片大小 imgSize: [num,num],  
+   * 图片锚点 imgAncher: [num,num],  
+   * 图片标签名称 lableName: 'abc',  
+   * 图片标签偏移 labelOffset: [num,num],  
+   * 图片与锚点的位置 position: /BL、BM、BR、ML、MR、TL、TM、TR分别代表左下角、底部中央、右下角、左侧中央、右侧中央、左上角、顶部中央、右上角,  
+   * 轨迹线 lineColor: '#aaaa',
+   * 轨迹线宽 lineWeight : num,
+   * 点移动速度 speed : num,
+   * return 点操控办法:start, pause, resume, stop, setSpeed, setPassLine
+   */
+  addMarkerAndPath(pathArr, imgPath, imgSize, imgAncher, lableName = '', labelOffset = [-35, 0], position = 'BM', lineColor = '#1104c7', lineWeight = 10, speed = 1000) {
     var zoomStyleMapping = {
       13: 0,
       14: 0,
@@ -278,8 +278,8 @@ class LwMap {
       20: 0
     };
     var marker = new AMap.ElasticMarker({
-      position: stratPostion,
-      zooms: [12, 20],
+      position: pathArr[0][0],
+      zooms: [13, 20],
       styles: [{
         icon: {
           img: imgPath,
@@ -298,21 +298,85 @@ class LwMap {
       }],
       zoomStyleMapping: zoomStyleMapping
     });
-    var polyline = new AMap.Polyline({
-      path: path,
-      showDir: true,
-      strokeColor: lineColor, // 线颜色
-      strokeWeight: lineWeight // 线宽
+    var vm = this;
+    pathArr.forEach((apath) => {
+      var polyline = new AMap.Polyline({
+        path: apath,
+        showDir: true,
+        strokeColor: lineColor, // 线颜色
+        strokeWeight: lineWeight // 线宽
+      });
+      vm.map.add(polyline);
     });
-    this.map.add(polyline);
+   
     this.map.add(marker);
-    marker.on('moving', function (e) {
-      polyline.setPath(e.passedPath);
-    });
-    // 图上小人沿着轨迹开始移动
-    marker.moveAlong(path, 1000);
-    this.__addObject(id+'pathMarker', marker);
-    this.__addObject(id+'pathPath', polyline);
+    return {
+      marker: marker,
+      path: pathArr,
+      map: this.map,
+      start: function () {
+        var vm = this;
+        var pathArr = [];
+        this.path.forEach((n)=>{
+          n.forEach(p=> {
+            pathArr.push(p);
+          });
+        });
+        this.marker.moveAlong(pathArr, speed);
+        console.log(pathArr)
+      },
+      /**
+       * 设置点暂停
+       */
+      pause: function () {
+        this.marker.pauseMove();
+      },
+      /**
+       * 设置点继续移动
+       */
+      resume: function () {
+        this.marker.resumeMove();
+      },
+      /**
+       * 设置点停止
+       */
+      stop: function () {
+        this.marker.stopMove()
+      },
+      /**
+       * 设置移动速度
+       * @param {移动速度: 数值越大越快} setspeed 
+       */
+      setSpeed: function (setspeed){
+        var vm = this;
+        var pathArr = [];
+        this.path.forEach((n)=>{
+          n.forEach(p=> {
+            pathArr.push(p);
+          });
+        });
+        this.marker.moveAlong(pathArr, setspeed);
+      },
+      /**
+       * 设置已经行驶的路线
+       * 已行驶路线颜色 lineColor 
+       * 已行驶路线透明度 lineopacity 
+       * 已行驶路线线宽 lineWeight 
+       * 已行驶路线直线样式 lineStyle 
+       */
+      setPassLine: function (lineColor = '#AF5', lineopacity = 1, lineWeight = 6, lineStyle = 'solid') {
+        var passedPolyline = new AMap.Polyline({
+          map: this.map,
+          strokeColor: lineColor,  //线颜色
+          strokeOpacity: lineopacity,     //线透明度
+          strokeWeight: lineWeight,      //线宽
+          strokeStyle: lineStyle  //线样式
+        });
+        this.marker.on('moving', function (e) {// 边移动边画线
+          passedPolyline.setPath(e.passedPath);
+        });
+      }
+    }
   }
 
   // 私有方法
