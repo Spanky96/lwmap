@@ -1,6 +1,6 @@
 // 高德地图
 var AMap = require('AMap');
-var $ = require('jquery');
+var _ = require('lodash');
 // 字符串颜色转数字颜色
 const Color = require('color-js');
 class LwMap {
@@ -37,16 +37,18 @@ class LwMap {
         zooms: [zoom[1], zoom[2]]
       };
     }
-    options = $.extend(options, zoomConfig);
+    options = _.extend(options, zoomConfig);
     if (extraConfig) {
-      options = $.extend(options, extraConfig);
+      options = _.extend(options, extraConfig);
     }
     var map = new AMap.Map(container, options);
     var vm = this;
+    vm.map = map;
+    vm.mapBox = {}; // 所有地图元素的数组
     if (options.viewMode && options.viewMode == '3D') {
-      map.plugin(['Map3D','ElasticMarker'], function () {
-        map.AmbientLight = new AMap.Lights.AmbientLight([1, 1, 1], 0.5);
-        map.DirectionLight = new AMap.Lights.DirectionLight([0, 0, 1], [1, 1, 1], 1);
+      map.plugin(['Map3D', 'ElasticMarker'], function () {
+        map.AmbientLight = new AMap.Lights.AmbientLight([1, 1, 1], 1);
+        map.DirectionLight = new AMap.Lights.DirectionLight([1, 1, 1], [1, 1, 1], 1);
         var object3Dlayer = new AMap.Object3DLayer();
         map.add(object3Dlayer);
         vm.object3Dlayer = object3Dlayer;
@@ -57,20 +59,35 @@ class LwMap {
             if (n.zooms) {
               if (n.zooms[0] > zoom || n.zooms[1] < zoom) {
                 vm.object3Dlayer.remove(n);
+                if (n.linkObject) {
+                  n.linkObject.forEach(o => {
+                    if (o.type == 'prism') {
+                      vm.object3Dlayer.remove(o);
+                    } else {
+                      vm.map.remove(o);
+                    }
+                  });
+                }
               } else {
                 if (vm.obj3DBoundBox.includes(n)) {
                   vm.object3Dlayer.add(n);
+                  if (n.linkObject) {
+                    n.linkObject.forEach(o => {
+                      if (o.type == 'prism') {
+                        vm.object3Dlayer.add(o);
+                      } else {
+                        vm.map.add(o);
+                      }
+                    });
+                  }
                 }
               }
             }
           });
         });
+        vm.add3DBoundListen();
       });
     }
-    
-    
-    this.map = map;
-    this.mapBox = {}; // 所有地图元素的数组
   }
 
   // 需要实现的方法
@@ -80,6 +97,17 @@ class LwMap {
    */
   panTo (point) {
     this.map.panTo(point);
+  }
+
+  addControlBar (offset = [0, 0], zoom = 1) {
+    var vm = this;
+    vm.map.plugin(['AMap.ControlBar'], function () {
+      vm.map.addControl(new AMap.ControlBar({
+        showZoomBar: false,
+        showControlButton: true,
+        position: { left: offset[0] + 'px', top: offset[1] + 'px', zoom: zoom }
+      }));
+    });
   }
 
   /**
@@ -101,7 +129,7 @@ class LwMap {
    * 增加标注物
    * 参数 id，url, 坐标点, 图片偏移，点击事件
    */
-  addMarker (id, url, point, size, offset, onclick) {
+  addMarker (id, url, point, size, offset, onclick, params) {
     var markerContent = '' +
       `<div class="custom-content-marker">
       <img ${size ? 'width="size[0]" height="size[1]"' : ''}  src="${url}">
@@ -111,6 +139,7 @@ class LwMap {
       content: markerContent,
       offset: new AMap.Pixel(-offset[0], -offset[1]) // 以 icon 的 [center bottom] 为原点
     });
+    marker = _.extend(marker, params);
     onclick && marker.on('click', onclick);
     this.__addObject(id, marker);
   }
@@ -130,27 +159,98 @@ class LwMap {
    * 参数 id : 每一块图块; boundArray : 每一个图块的GPS坐标; color : 图块颜色;
    * opacity : 透明度; height : 图块高度; zooms :[显示区间]; onclick: 点击事件
    */
-  add3DBoundary (id, boundArray, color = '#b5c817', opacity = 0.7, height = 2000, zooms = [3, 20], onclick = ()=> {}) {
+  add3DBoundary (id, boundArray, color = '#b5c817', opacity = 0.7, height = 2000, zooms = '', onclick = '') {
     var bounds = [];
     boundArray.forEach(function (i) {
       bounds.push(new AMap.LngLat(i[0], i[1]));
     });
     var colorObj = Color(color);
     var rgba = [colorObj.red, colorObj.green, colorObj.blue, opacity];
-    var wall = new AMap.Object3D.Prism({
+    var mesh = new AMap.Object3D.Prism({
       path: bounds,
       height: height,
       color: rgba
     });
-    wall.zooms = zooms;
-    wall.backOrFront = 'both';
-    wall.transparent = true;
-    wall.lwcolor = color;
-    this.obj3DBoundBox.push(wall);
-    this.object3Dlayer.add(wall);
-    this.__addObject(id, wall);
-    onclick && (wall.lwClick = onclick);
+    mesh.zooms = zooms;
+    mesh.backOrFront = 'both';
+    mesh.transparent = true;
+    mesh.lwcolor = color;
+    this.obj3DBoundBox.push(mesh);
+    this.object3Dlayer.add(mesh);
+    this.__addObject(id, mesh);
+    onclick && (mesh.lwClick = onclick);
   }
+
+  add3DBoundaryByFeature (feature, rgb, opacity = 0.7, height = 2000, zooms = '', onclick = '', type = '') {
+    var bounds = [];
+    feature.geometry.coordinates[0].forEach(function (i) {
+      bounds.push(new AMap.LngLat(i[0], i[1]));
+    });
+    var color = rgb || feature.properties.fillColor || this.__getRandomRgbColor();
+
+    var colorObj = Color(color);
+    var rgba = [colorObj.red, colorObj.green, colorObj.blue, opacity];
+    var mesh = new AMap.Object3D.Prism({
+      path: bounds,
+      height: height,
+      color: rgba
+    });
+    mesh.zooms = zooms;
+    mesh.type = type || feature.type;
+    mesh.backOrFront = 'both';
+    mesh.transparent = true;
+    mesh.lwcolor = color;
+    mesh.lwOpacity = opacity;
+
+    var text = new AMap.Text({
+      text: feature.properties.name,
+      verticalAlign: 'bottom',
+      position: feature.properties.cp,
+      height: height * 1.2,
+      style: {
+        'background-color': 'transparent',
+        '-webkit-text-stroke': 'red',
+        '-webkit-text-stroke-width': '0.5px',
+        'text-align': 'center',
+        'border': 'none',
+        'color': 'white',
+        'font-size': '22px',
+        'font-weight': 600
+      }
+    });
+    var wall = new AMap.Object3D.Wall({
+      path: bounds,
+      height: height * 1.1,
+      color: '#1ae3fc'
+    });
+    this.object3Dlayer.add(wall);
+
+    this.__addObject(feature.id + '_text', text);
+    mesh.linkObject = [text, wall]; // 把标题和文字组合起来
+    this.obj3DBoundBox.push(mesh);
+    this.object3Dlayer.add(mesh);
+    onclick && (mesh.lwClick = onclick);
+  }
+
+  /**
+   * 清除类型为type的所有网格
+   */
+  removeFeature (type) {
+    var vm = this;
+    vm.obj3DBoundBox.forEach(function (obj) {
+      if (obj.type == type) {
+        if (obj.linkObject) {
+          obj.linkObject.forEach(o => {
+            vm.map.remove(o);
+            vm.object3Dlayer.remove(o);
+          });
+        }
+        vm.object3Dlayer.remove(obj);
+      }
+    });
+    _.remove(vm.obj3DBoundBox, (n) => { return n.type == type; });
+  }
+
   /**
    * 添加图块监听方法 : 添加点击放大 , 鼠标悬停换色监听
    * 参数 color : 鼠标选中颜色; opacity : 鼠标悬停图块透明度 
@@ -172,30 +272,28 @@ class LwMap {
           var r = colorObj.red;
           var g = colorObj.green;
           var b = colorObj.blue;
-          var a = 0.7;
+          var a = prism.lwOpacity || 0.7;
           // 不能重新赋值，只允许修改内容
           vertexColors.splice(i * 4, 4, r, g, b, a);
         }
         prism.needUpdate = true;
         prism.reDraw();
       });
-      
-      if (prism) {
-        if(prism.type!='mesh'){
-          var colorObj = Color(color);
-          var vertexColors = prism.geometry.vertexColors;
-          var len = vertexColors.length;
-          for (var i = 0; i < len / 4; i++) {
-            var r = colorObj.red;
-            var g = colorObj.green;
-            var b = colorObj.blue;
-            var a = opacity;
-            // 不能重新赋值，只允许修改内容
-            vertexColors.splice(i * 4, 4, r, g, b, a);
-          }
-          prism.needUpdate = true;
-          prism.reDraw();
+
+      if (prism && prism.lwClick) {
+        var colorObj = Color(color);
+        var vertexColors = prism.geometry.vertexColors;
+        var len = vertexColors.length;
+        for (var i = 0; i < len / 4; i++) {
+          var r = colorObj.red;
+          var g = colorObj.green;
+          var b = colorObj.blue;
+          var a = opacity;
+          // 不能重新赋值，只允许修改内容
+          vertexColors.splice(i * 4, 4, r, g, b, a);
         }
+        prism.needUpdate = true;
+        prism.reDraw();
       }
     });
     this.map.on('click', function (ev) {
@@ -207,51 +305,6 @@ class LwMap {
     });
   }
   
-  /**
-   * 添加雷达
-   * 参数 position: 雷达中心点位置gps坐标
-   * radius : 雷达半径
-   * color: 雷达颜色
-   */
-  addRadar (position, radius, color = '#00ff00') {
-    var radar = new AMap.Object3D.Mesh();
-    radar.transparent = true;
-    radar.backOrFront = 'front';
-    var p = new AMap.LngLat(position[0], position[1]);
-    var geometry = radar.geometry;
-  
-    var unit = 1;
-    var range = 500;
-    var count = range / unit;
-    var colorObj = Color(color);
-    for (var i = 0; i < count; i += 1) {
-      var angle1 = i * unit * Math.PI / 180;
-      var angle2 = (i + 1) * unit * Math.PI / 180;
-
-      var p1x = Math.cos(angle1) * radius;
-      var p1y = Math.sin(angle1) * radius;
-      var p2x = Math.cos(angle2) * radius;
-      var p2y = Math.sin(angle2) * radius;
-
-      geometry.vertices.push(0, 0, 0);
-      geometry.vertices.push(p1x, p1y, 0);
-      geometry.vertices.push(p2x, p2y, 0);
-      
-      var opacityStart = 1 - Math.pow(i / count, 0.3);
-      var opacityEnd = 1 - Math.pow((i + 1) / count, 0.3);
-      geometry.vertexColors.push(colorObj.red, colorObj.green, colorObj.blue, opacityStart);
-      geometry.vertexColors.push(colorObj.red, colorObj.green, colorObj.blue, opacityStart);
-      geometry.vertexColors.push(colorObj.red, colorObj.green, colorObj.blue, opacityEnd);
-    }
-    radar.position(p);
-    this.object3Dlayer.add(radar);
-    function scan () {
-      radar.rotateZ(-2);
-      AMap.Util.requestAnimFrame(scan);
-    }
-    scan();
-  }
-
   /**
    * 设置轨迹路线
    * 轨迹数组 pathArr: [[a,b], [a,b]],  
@@ -266,7 +319,7 @@ class LwMap {
    * 点移动速度 speed : num,
    * return 点操控办法:start, pause, resume, stop, setSpeed, setPassLine
    */
-  addMarkerAndPath(pathArr, imgPath, imgSize, imgAncher, lableName = '', labelOffset = [-35, 0], position = 'BM', lineColor = '#1104c7', lineWeight = 10, speed = 1000) {
+  addMarkerAndPath (pathArr, imgPath, imgSize, imgAncher, lableName = '', labelOffset = [-35, 0], position = 'BM', lineColor = '#1104c7', lineWeight = 10, speed = 1000) {
     var zoomStyleMapping = {
       13: 0,
       14: 0,
@@ -279,15 +332,15 @@ class LwMap {
     };
     var marker = new AMap.ElasticMarker({
       position: pathArr[0][0],
-      zooms: [13, 20],
+      zooms: [3, 20],
       styles: [{
         icon: {
           img: imgPath,
           size: imgSize, // 可见区域的大小
           ancher: imgAncher, // 锚点
           fitZoom: 13, // 最合适的级别
-          scaleFactor: 2, // 地图放大一级的缩放比例系数
-          maxScale: 4, // 最大放大比例
+          scaleFactor: 1.1, // 地图放大一级的缩放比例系数
+          maxScale: 2, // 最大放大比例
           minScale: 1 // 最小放大比例
         },
         label: {
@@ -298,6 +351,7 @@ class LwMap {
       }],
       zoomStyleMapping: zoomStyleMapping
     });
+    marker.linkObject = [];
     var vm = this;
     pathArr.forEach((apath) => {
       var polyline = new AMap.Polyline({
@@ -307,55 +361,71 @@ class LwMap {
         strokeWeight: lineWeight // 线宽
       });
       vm.map.add(polyline);
+      marker.linkObject.push(polyline);
     });
-   
-    this.map.add(marker);
+    // 删掉老的
+    var oldMarker = this.mapBox.pathAndMarker;
+    if (oldMarker) {
+      oldMarker.stopMove();
+      var linkObjs = oldMarker.linkObject;
+      if (linkObjs) {
+        var map = this.map;
+        linkObjs.forEach((n) => {
+          map.remove(n);
+        });
+      }
+    }
+    this.__addObject('pathAndMarker', marker);
     return {
       marker: marker,
       path: pathArr,
       map: this.map,
-      start: function () {
+      status: 0, // 0 停止   1: 在跑  2: 暂停,
+      speed: speed,
+      afterMoveAlongEnd: function () {
+        console.log('跑完第' + ++this.pathIndex + '段');
+        var nextPath = this.path[this.pathIndex];
+        if (nextPath) {
+          this.run(this.speed, this.pathIndex);
+        }
+      },
+      init: function () {
+        // 增加监听方法
+        this.marker.on('movealong', this.afterMoveAlongEnd, this);
+      },
+      run: function (v, pathIndex = 0) {
+        this.status = 1;
+        this.pathIndex = pathIndex;
+        console.log('开始跑第' + (this.pathIndex + 1) + '段');
+        this.speed = v || this.speed;
         var vm = this;
-        var pathArr = [];
-        this.path.forEach((n)=>{
-          n.forEach(p=> {
-            pathArr.push(p);
-          });
-        });
-        this.marker.moveAlong(pathArr, speed);
-        console.log(pathArr)
+        setTimeout(function () {
+          vm.marker.moveAlong(vm.path[pathIndex], v);
+        }, 100);
       },
       /**
        * 设置点暂停
        */
       pause: function () {
+        if (this.status == 2) { return; }
+        this.status = 2;
         this.marker.pauseMove();
       },
       /**
        * 设置点继续移动
        */
       resume: function () {
+        if (this.status == 1) { return; }
+        this.status = 1;
         this.marker.resumeMove();
       },
       /**
        * 设置点停止
        */
       stop: function () {
-        this.marker.stopMove()
-      },
-      /**
-       * 设置移动速度
-       * @param {移动速度: 数值越大越快} setspeed 
-       */
-      setSpeed: function (setspeed){
-        var vm = this;
-        var pathArr = [];
-        this.path.forEach((n)=>{
-          n.forEach(p=> {
-            pathArr.push(p);
-          });
-        });
-        this.marker.moveAlong(pathArr, setspeed);
+        if (this.status == 0) { return; }
+        this.status = 0;
+        this.marker.stopMove();
       },
       /**
        * 设置已经行驶的路线
@@ -367,26 +437,83 @@ class LwMap {
       setPassLine: function (lineColor = '#AF5', lineopacity = 1, lineWeight = 6, lineStyle = 'solid') {
         var passedPolyline = new AMap.Polyline({
           map: this.map,
-          strokeColor: lineColor,  //线颜色
-          strokeOpacity: lineopacity,     //线透明度
-          strokeWeight: lineWeight,      //线宽
-          strokeStyle: lineStyle  //线样式
+          strokeColor: lineColor,  
+          strokeOpacity: lineopacity,     
+          strokeWeight: lineWeight,     
+          strokeStyle: lineStyle  
         });
-        this.marker.on('moving', function (e) {// 边移动边画线
+        this.marker.on('moving', function (e) {
           passedPolyline.setPath(e.passedPath);
         });
       }
+    };
+  }
+
+  /**
+   * 清除类型为type的所有网格
+   */
+  removeObjByTypename (type) {
+    var vm = this;
+    vm.obj3DBoundBox.forEach(function (obj) {
+      if (obj.type == type) {
+        if (obj.linkObject) {
+          obj.linkObject.forEach(o => {
+            vm.map.remove(o);
+            vm.object3Dlayer.remove(o);
+          });
+        }
+        vm.object3Dlayer.remove(obj);
+      }
+    });
+    _.remove(vm.obj3DBoundBox, (n) => { return n.type == type; });
+  }
+
+  /**
+   * 清除地图图标
+   */
+  clearActivities (foo) {
+    var vm = this;
+    !foo && (foo = (n) => n.type == 'activity');
+    if (foo instanceof Function) {
+      var keys = Object.keys(vm.mapBox);
+      keys.forEach((key) => {
+        let obj = vm.mapBox[key];
+        if (foo(obj)) {
+          vm.removeObject(key);
+        }
+      });
     }
+  }
+
+  showInfoWindow (content, position, anchor = 'bottom-center') {
+    var infoWindow = new AMap.InfoWindow({
+      anchor,
+      content
+    });
+    infoWindow.open(this.map, position);
   }
 
   // 私有方法
   __addObject (id, marker) {
-    if (this.mapBox[id]) {
+    var obj = this.mapBox[id];
+    if (obj) {
       // 已经有了
-      this.map.remove(this.mapBox[id]);
+      // var linkObjs = obj.linkObject;
+      // if (linkObjs) {
+      //   var map = this.map;
+      //   linkObjs.forEach((n) => {
+      //     map.remove(n);
+      //   });
+      // }
+      this.map.remove(obj);
     }
     this.map.add(marker);
     this.mapBox[id] = marker;
+  }
+  __getRandomRgbColor () {
+    return new Array(3).fill(255).map((o) => {
+      return o * Math.random();
+    });
   }
 }
 module.exports = LwMap;
